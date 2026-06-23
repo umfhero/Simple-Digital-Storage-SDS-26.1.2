@@ -1,6 +1,6 @@
 {
   "required": true,
-  "package": "net.umf.simpledigitalstorage.mixin",
+  "package": "net.umf.polyfactory.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [],
   "injectors": {

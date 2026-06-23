@@ -1,11 +1,11 @@
 {
-  "itemGroup.simpledigitalstorage": "Simple Digital Storage",
-  "block.simpledigitalstorage.storage_hub": "Storage Hub",
-  "block.simpledigitalstorage.storage_cable": "Storage Cable",
-  "container.simpledigitalstorage.storage_hub": "Storage Hub",
+  "itemGroup.polyfactory": "Poly Factory",
+  "block.polyfactory.fabricator": "Fabricator",
+  "container.polyfactory.fabricator": "Fabricator",
 
-  "simpledigitalstorage.configuration.title": "Simple Digital Storage Configs",
-  "simpledigitalstorage.configuration.section.simpledigitalstorage.common.toml": "Simple Digital Storage Configs",
-  "simpledigitalstorage.configuration.section.simpledigitalstorage.common.toml.title": "Simple Digital Storage Configs",
-  "simpledigitalstorage.configuration.maxCableRange": "Max Cable Range"
+  "polyfactory.configuration.title": "Poly Factory Configs",
+  "polyfactory.configuration.section.polyfactory.common.toml": "Poly Factory Configs",
+  "polyfactory.configuration.section.polyfactory.common.toml.title": "Poly Factory Configs",
+  "polyfactory.configuration.fabricatorEnergyCapacity": "Fabricator Energy Capacity",
+  "polyfactory.configuration.fabricatorMaxEnergyInsert": "Fabricator Max Energy Insert"
 }

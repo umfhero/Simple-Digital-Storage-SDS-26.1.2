@@ -1,0 +1,12 @@
+{
+  "variants": {
+    "facing=north,active=false": { "model": "polyfactory:block/fabricator" },
+    "facing=south,active=false": { "model": "polyfactory:block/fabricator", "y": 180 },
+    "facing=east,active=false": { "model": "polyfactory:block/fabricator", "y": 90 },
+    "facing=west,active=false": { "model": "polyfactory:block/fabricator", "y": 270 },
+    "facing=north,active=true": { "model": "polyfactory:block/fabricator_on" },
+    "facing=south,active=true": { "model": "polyfactory:block/fabricator_on", "y": 180 },
+    "facing=east,active=true": { "model": "polyfactory:block/fabricator_on", "y": 90 },
+    "facing=west,active=true": { "model": "polyfactory:block/fabricator_on", "y": 270 }
+  }
+}
