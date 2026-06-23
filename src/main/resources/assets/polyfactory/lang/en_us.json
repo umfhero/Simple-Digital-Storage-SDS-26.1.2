@@ -14,5 +14,10 @@
   "polyfactory.configuration.section.polyfactory.common.toml": "Poly Factory Configs",
   "polyfactory.configuration.section.polyfactory.common.toml.title": "Poly Factory Configs",
   "polyfactory.configuration.fabricatorEnergyCapacity": "Fabricator Energy Capacity",
-  "polyfactory.configuration.fabricatorMaxEnergyInsert": "Fabricator Max Energy Insert"
+  "polyfactory.configuration.fabricatorMaxEnergyInsert": "Fabricator Max Energy Insert",
+
+  "jei.polyfactory.fabricating.energy": "Energy: %s FE",
+  "jei.polyfactory.fabricating.time": "Time: %ss",
+  "jei.polyfactory.fabricating.energy_per_tick": "%s FE per tick",
+  "jei.polyfactory.fabricating.ticks": "%s ticks"
 }

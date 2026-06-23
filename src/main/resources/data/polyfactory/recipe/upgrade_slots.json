@@ -1,10 +1,16 @@
 {
-  "type": "minecraft:crafting_shapeless",
-  "category": "misc",
-  "ingredients": [
-    "polyfactory:upgrade",
-    "minecraft:iron_ingot"
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "ECE",
+    "CUC",
+    "ECE"
   ],
+  "key": {
+    "E": "minecraft:ender_chest",
+    "C": "minecraft:chest",
+    "U": "polyfactory:upgrade"
+  },
   "result": {
     "id": "polyfactory:upgrade_slots",
     "count": 1

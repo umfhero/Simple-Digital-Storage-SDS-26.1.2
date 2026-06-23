@@ -1,10 +1,16 @@
 {
-  "type": "minecraft:crafting_shapeless",
-  "category": "misc",
-  "ingredients": [
-    "polyfactory:upgrade",
-    "minecraft:glowstone_dust"
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    "GDG",
+    "DUD",
+    "GDG"
   ],
+  "key": {
+    "G": "minecraft:glowstone",
+    "D": "minecraft:glowstone_dust",
+    "U": "polyfactory:upgrade"
+  },
   "result": {
     "id": "polyfactory:upgrade_energy",
     "count": 1

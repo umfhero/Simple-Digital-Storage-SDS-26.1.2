@@ -83,7 +83,7 @@ Drop a JSON file in `src/main/resources/data/polyfactory/recipe/`:
 
 - [ ] Multiple machine tiers (faster processing / bigger energy buffer).
 - [ ] Multi-input or multi-output recipes (would require moving off `SingleItemRecipe`).
-- [ ] JEI/REI recipe display integration.
+- [x] JEI recipe display integration (see `net.umf.polyfactory.jei`).
 - [ ] Per-side I/O configuration (currently any side can insert/extract/charge).
 
 ---
