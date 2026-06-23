@@ -2,6 +2,13 @@
   "itemGroup.polyfactory": "Poly Factory",
   "block.polyfactory.fabricator": "Fabricator",
   "container.polyfactory.fabricator": "Fabricator",
+  "item.polyfactory.upgrade": "Upgrade",
+  "item.polyfactory.upgrade_speed": "Speed Upgrade",
+  "item.polyfactory.upgrade_energy": "Energy Upgrade",
+  "item.polyfactory.upgrade_slots": "Slot Upgrade",
+
+  "message.polyfactory.upgrade_applied": "%s installed (%s/%s)",
+  "message.polyfactory.upgrade_maxed": "%s is already at maximum level",
 
   "polyfactory.configuration.title": "Poly Factory Configs",
   "polyfactory.configuration.section.polyfactory.common.toml": "Poly Factory Configs",

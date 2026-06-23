@@ -5,6 +5,6 @@
     "id": "minecraft:iron_ingot",
     "count": 1
   },
-  "processing_time": 100,
+  "processing_time": 60,
   "energy_per_tick": 20
 }

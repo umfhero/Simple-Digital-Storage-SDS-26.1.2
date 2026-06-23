@@ -1,8 +1,10 @@
 package net.umf.polyfactory.block.entity;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -17,12 +19,12 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
 import net.minecraft.world.level.storage.ValueOutput;
-import net.neoforged.neoforge.transfer.energy.SimpleEnergyHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.transaction.Transaction;
 import net.umf.polyfactory.Config;
 import net.umf.polyfactory.PolyFactory;
 import net.umf.polyfactory.block.FabricatorBlock;
+import net.umf.polyfactory.block.UpgradeType;
 import net.umf.polyfactory.gui.FabricatorMenu;
 import net.umf.polyfactory.recipe.FabricatingRecipe;
 import net.umf.polyfactory.recipe.ModRecipes;
@@ -31,41 +33,70 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Optional;
 
 /**
- * Block entity for the Fabricator. Holds a 2-slot item inventory (input/output) and an internal
- * FE buffer, and drives the input -> output {@link FabricatingRecipe} processing each server tick.
+ * Block entity for the Fabricator. Holds a multi-lane item inventory (see
+ * {@link FabricatorItemHandler}) and an internal FE buffer, and drives each unlocked lane's
+ * input -> output {@link FabricatingRecipe} processing every server tick.
+ * <p>
+ * Progress is tracked in <b>energy units accumulated</b> toward a recipe's fixed total cost
+ * ({@code energyPerTick * processingTime}), not in ticks elapsed. A Speed Upgrade shortens the
+ * nominal number of ticks that total should be paid off in (raising the energy needed per tick to
+ * stay on schedule), but the energy buffer's transfer rate (raised by Energy Upgrades) still caps
+ * how much can actually be extracted each tick - so a lane with maxed speed but unupgraded energy
+ * throughput simply takes longer than its nominal time, "buffering" instead of stalling.
  */
 public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
 
+    private static final int[] SPEED_DIVISORS = {1, 4, 16, 64};
+    private static final int SPLIT_INTERVAL_TICKS = 20;
+
     private final FabricatorItemHandler itemHandler = new FabricatorItemHandler();
     private final FabricatorIoView ioView = new FabricatorIoView(this.itemHandler);
-    // maxExtract must stay >= the highest energy_per_tick used by any recipe: SimpleEnergyHandler.extract()
-    // is also what serverTick uses internally to drain FE for processing, not just external capability access.
-    private final SimpleEnergyHandler energyHandler = new SimpleEnergyHandler(
+    private final FabricatorEnergyHandler energyHandler = new FabricatorEnergyHandler(
             Config.FABRICATOR_ENERGY_CAPACITY.get(), Config.FABRICATOR_MAX_ENERGY_INSERT.get(), Config.FABRICATOR_MAX_ENERGY_INSERT.get());
     private final RecipeManager.CachedCheck<SingleRecipeInput, FabricatingRecipe> quickCheck =
             RecipeManager.createCheck(ModRecipes.FABRICATING_TYPE.get());
 
-    private int progress;
-    private int maxProgress;
+    private int speedLevel;
+    private int energyLevel;
+    private int slotLevel;
+
+    private final int[] laneProgress = new int[FabricatorItemHandler.MAX_LANES];
+    private final int[] laneMaxProgress = new int[FabricatorItemHandler.MAX_LANES];
+    private final boolean[] laneBlocked = new boolean[FabricatorItemHandler.MAX_LANES];
+    private int splitTickCounter;
 
     private final ContainerData dataAccess = new ContainerData() {
         @Override
         public int get(int index) {
-            return switch (index) {
-                case FabricatorMenu.DATA_PROGRESS -> FabricatorBlockEntity.this.progress;
-                case FabricatorMenu.DATA_MAX_PROGRESS -> FabricatorBlockEntity.this.maxProgress;
-                case FabricatorMenu.DATA_ENERGY -> FabricatorBlockEntity.this.energyHandler.getAmountAsInt();
-                case FabricatorMenu.DATA_MAX_ENERGY -> FabricatorBlockEntity.this.energyHandler.getCapacityAsInt();
-                default -> 0;
-            };
+            if (index < FabricatorMenu.LANE_PROGRESS_COUNT) {
+                return FabricatorBlockEntity.this.laneProgress[index];
+            }
+            if (index < FabricatorMenu.LANE_PROGRESS_COUNT * 2) {
+                return FabricatorBlockEntity.this.laneMaxProgress[index - FabricatorMenu.LANE_PROGRESS_COUNT];
+            }
+            if (index == FabricatorMenu.DATA_ENERGY) {
+                return FabricatorBlockEntity.this.energyHandler.getAmountAsInt();
+            }
+            if (index == FabricatorMenu.DATA_MAX_ENERGY) {
+                return FabricatorBlockEntity.this.energyHandler.getCapacityAsInt();
+            }
+            if (index == FabricatorMenu.DATA_SPLIT) {
+                return FabricatorBlockEntity.this.itemHandler.isSplitInputs() ? 1 : 0;
+            }
+            if (index >= FabricatorMenu.DATA_BLOCKED) {
+                return FabricatorBlockEntity.this.laneBlocked[index - FabricatorMenu.DATA_BLOCKED] ? 1 : 0;
+            }
+            return 0;
         }
 
         @Override
         public void set(int index, int value) {
-            switch (index) {
-                case FabricatorMenu.DATA_PROGRESS -> FabricatorBlockEntity.this.progress = value;
-                case FabricatorMenu.DATA_MAX_PROGRESS -> FabricatorBlockEntity.this.maxProgress = value;
-                default -> {}
+            if (index < FabricatorMenu.LANE_PROGRESS_COUNT) {
+                FabricatorBlockEntity.this.laneProgress[index] = value;
+            } else if (index < FabricatorMenu.LANE_PROGRESS_COUNT * 2) {
+                FabricatorBlockEntity.this.laneMaxProgress[index - FabricatorMenu.LANE_PROGRESS_COUNT] = value;
+            } else if (index == FabricatorMenu.DATA_SPLIT) {
+                FabricatorBlockEntity.this.itemHandler.setSplitInputs(value != 0);
             }
         }
 
@@ -87,7 +118,7 @@ public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
         return this.ioView;
     }
 
-    public SimpleEnergyHandler getEnergyHandler() {
+    public FabricatorEnergyHandler getEnergyHandler() {
         return this.energyHandler;
     }
 
@@ -95,11 +126,130 @@ public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
         return this.dataAccess;
     }
 
+    public int getActiveLanes() {
+        return 1 + this.slotLevel;
+    }
+
+    public int getSpeedLevel() {
+        return this.speedLevel;
+    }
+
+    public int getEnergyLevel() {
+        return this.energyLevel;
+    }
+
+    public int getSlotLevel() {
+        return this.slotLevel;
+    }
+
+    public int getUpgradeLevel(UpgradeType type) {
+        return switch (type) {
+            case SPEED -> this.speedLevel;
+            case ENERGY -> this.energyLevel;
+            case SLOTS -> this.slotLevel;
+        };
+    }
+
+    public boolean isSplitInputs() {
+        return this.itemHandler.isSplitInputs();
+    }
+
+    public void toggleSplitInputs() {
+        this.itemHandler.setSplitInputs(!this.itemHandler.isSplitInputs());
+        this.setChanged();
+    }
+
+    public void writeMenuData(RegistryFriendlyByteBuf buf, BlockPos pos) {
+        buf.writeBlockPos(pos);
+        buf.writeVarInt(this.getActiveLanes());
+        buf.writeVarInt(this.speedLevel);
+        buf.writeVarInt(this.energyLevel);
+        buf.writeVarInt(this.slotLevel);
+    }
+
+    /**
+     * Installs one level of the given upgrade. Returns {@code false} (consuming nothing) if that
+     * upgrade is already at {@link UpgradeType#MAX_LEVEL}.
+     */
+    public boolean applyUpgrade(UpgradeType type) {
+        switch (type) {
+            case SPEED -> {
+                if (this.speedLevel >= UpgradeType.MAX_LEVEL) {
+                    return false;
+                }
+                this.speedLevel++;
+            }
+            case ENERGY -> {
+                if (this.energyLevel >= UpgradeType.MAX_LEVEL) {
+                    return false;
+                }
+                this.energyLevel++;
+                this.recomputeEnergyLimits();
+            }
+            case SLOTS -> {
+                if (this.slotLevel >= UpgradeType.MAX_LEVEL) {
+                    return false;
+                }
+                this.slotLevel++;
+                this.itemHandler.setActiveLanes(this.getActiveLanes());
+                if (this.level != null) {
+                    BlockState state = this.getBlockState();
+                    this.level.setBlock(this.worldPosition, state.setValue(FabricatorBlock.SLOT_TIER, this.slotLevel), 3);
+                }
+            }
+        }
+        this.setChanged();
+        return true;
+    }
+
+    private void recomputeEnergyLimits() {
+        int multiplier = 1;
+        for (int i = 0; i < this.energyLevel; i++) {
+            multiplier *= 3;
+        }
+        int capacity = Config.FABRICATOR_ENERGY_CAPACITY.get() * multiplier;
+        int rate = Config.FABRICATOR_MAX_ENERGY_INSERT.get() * multiplier;
+        this.energyHandler.setLimits(capacity, rate, rate);
+    }
+
     public static void serverTick(ServerLevel level, BlockPos pos, BlockState state, FabricatorBlockEntity be) {
         boolean changed = false;
+        boolean anyActive = false;
+        int activeLanes = be.getActiveLanes();
 
-        ItemResource inputResource = be.itemHandler.getResource(FabricatorItemHandler.SLOT_INPUT);
-        long inputAmount = be.itemHandler.getAmountAsLong(FabricatorItemHandler.SLOT_INPUT);
+        be.splitTickCounter++;
+        if (be.splitTickCounter >= SPLIT_INTERVAL_TICKS) {
+            be.splitTickCounter = 0;
+            if (be.itemHandler.rebalanceInputs()) {
+                changed = true;
+            }
+        }
+
+        for (int lane = 0; lane < activeLanes; lane++) {
+            if (tickLane(level, be, lane)) {
+                anyActive = true;
+                changed = true;
+            }
+        }
+
+        boolean wasActive = state.getValue(FabricatorBlock.ACTIVE);
+        if (wasActive != anyActive) {
+            level.setBlock(pos, state.setValue(FabricatorBlock.ACTIVE, anyActive), 3);
+            changed = true;
+        }
+
+        if (changed) {
+            be.setChanged();
+        }
+    }
+
+    /** @return whether this lane is actively processing (drew energy) this tick. */
+    private static boolean tickLane(ServerLevel level, FabricatorBlockEntity be, int lane) {
+        int inputSlot = FabricatorItemHandler.inputSlot(lane);
+        int outputSlot = FabricatorItemHandler.outputSlot(lane);
+
+        ItemResource inputResource = be.itemHandler.getResource(inputSlot);
+        long inputAmount = be.itemHandler.getAmountAsLong(inputSlot);
 
         FabricatingRecipe recipe = null;
         ItemStack result = ItemStack.EMPTY;
@@ -112,60 +262,55 @@ public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
             }
         }
 
-        if (recipe == null || result.isEmpty() || !canInsertOutput(be.itemHandler, result)) {
-            if (be.progress != 0) {
-                be.progress = 0;
-                changed = true;
+        if (recipe == null || result.isEmpty()) {
+            be.laneProgress[lane] = 0;
+            be.laneMaxProgress[lane] = 0;
+            be.laneBlocked[lane] = false;
+            return false;
+        }
+
+        if (!canInsertOutput(be.itemHandler, outputSlot, result)) {
+            be.laneProgress[lane] = 0;
+            be.laneMaxProgress[lane] = 0;
+            be.laneBlocked[lane] = true;
+            return false;
+        }
+        be.laneBlocked[lane] = false;
+
+        int totalCost = recipe.energyPerTick() * recipe.processingTime();
+        int speedDivisor = SPEED_DIVISORS[be.speedLevel];
+        int effectiveTicks = Math.max(1, Mth.ceil(recipe.processingTime() / (double) speedDivisor));
+        int requiredPerTick = Math.max(1, Mth.ceil((totalCost - be.laneProgress[lane]) / (double) effectiveTicks));
+
+        be.laneMaxProgress[lane] = totalCost;
+
+        int extracted;
+        try (Transaction tx = Transaction.openRoot()) {
+            extracted = be.energyHandler.extract(requiredPerTick, tx);
+            if (extracted > 0) {
+                tx.commit();
             }
-            be.maxProgress = 0;
-        } else {
-            be.maxProgress = recipe.processingTime();
-            int energyNeeded = recipe.energyPerTick();
-            boolean energized;
+        }
+
+        if (extracted <= 0) {
+            return false;
+        }
+
+        be.laneProgress[lane] += extracted;
+        if (be.laneProgress[lane] >= totalCost) {
             try (Transaction tx = Transaction.openRoot()) {
-                int extracted = be.energyHandler.extract(energyNeeded, tx);
-                energized = extracted >= energyNeeded;
-                if (energized) {
-                    tx.commit();
-                }
+                be.itemHandler.extract(inputSlot, inputResource, 1, tx);
+                tx.commit();
             }
-
-            if (energized) {
-                if (be.progress == 0) {
-                    PolyFactory.LOGGER.debug("Fabricator at {} started processing {} -> {}", pos, inputResource, result);
-                }
-                be.progress++;
-                changed = true;
-                if (be.progress >= recipe.processingTime()) {
-                    try (Transaction tx = Transaction.openRoot()) {
-                        be.itemHandler.extract(FabricatorItemHandler.SLOT_INPUT, inputResource, 1, tx);
-                        tx.commit();
-                    }
-                    insertOutput(be.itemHandler, result);
-                    be.progress = 0;
-                    PolyFactory.LOGGER.debug("Fabricator at {} finished processing, output now {}", pos, be.itemHandler.getResource(FabricatorItemHandler.SLOT_OUTPUT));
-                }
-            } else if (level.getGameTime() % 20 == 0) {
-                PolyFactory.LOGGER.debug("Fabricator at {} has a valid recipe for {} but not enough energy ({} stored, needs {}/tick)",
-                        pos, inputResource, be.energyHandler.getAmountAsLong(), energyNeeded);
-            }
+            insertOutput(be.itemHandler, outputSlot, result);
+            be.laneProgress[lane] = 0;
         }
-
-        boolean wasActive = state.getValue(FabricatorBlock.ACTIVE);
-        boolean isActive = be.progress > 0;
-        if (wasActive != isActive) {
-            level.setBlock(pos, state.setValue(FabricatorBlock.ACTIVE, isActive), 3);
-            changed = true;
-        }
-
-        if (changed) {
-            be.setChanged();
-        }
+        return true;
     }
 
-    private static boolean canInsertOutput(FabricatorItemHandler handler, ItemStack result) {
+    private static boolean canInsertOutput(FabricatorItemHandler handler, int outputSlot, ItemStack result) {
         ItemResource resultResource = ItemResource.of(result);
-        ItemResource currentOutput = handler.getResource(FabricatorItemHandler.SLOT_OUTPUT);
+        ItemResource currentOutput = handler.getResource(outputSlot);
         if (currentOutput.isEmpty()) {
             return true;
         }
@@ -173,15 +318,15 @@ public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
             return false;
         }
         // Not handler.getCapacityAsLong(...): that's gated by isValid(), which is deliberately false
-        // for the output slot (to reject external/GUI inserts there) and would always report 0 room.
-        long currentAmount = handler.getAmountAsLong(FabricatorItemHandler.SLOT_OUTPUT);
+        // for output slots (to reject external/GUI inserts there) and would always report 0 room.
+        long currentAmount = handler.getAmountAsLong(outputSlot);
         return currentAmount + result.getCount() <= resultResource.getMaxStackSize();
     }
 
-    private static void insertOutput(FabricatorItemHandler handler, ItemStack result) {
+    private static void insertOutput(FabricatorItemHandler handler, int outputSlot, ItemStack result) {
         ItemResource resultResource = ItemResource.of(result);
-        long currentAmount = handler.getAmountAsLong(FabricatorItemHandler.SLOT_OUTPUT);
-        handler.set(FabricatorItemHandler.SLOT_OUTPUT, resultResource, (int) (currentAmount + result.getCount()));
+        long currentAmount = handler.getAmountAsLong(outputSlot);
+        handler.set(outputSlot, resultResource, (int) (currentAmount + result.getCount()));
     }
 
     @Override
@@ -189,8 +334,16 @@ public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
         super.loadAdditional(input);
         this.itemHandler.deserialize(input.childOrEmpty("items"));
         this.energyHandler.deserialize(input.childOrEmpty("energy"));
-        this.progress = input.getIntOr("progress", 0);
-        this.maxProgress = input.getIntOr("max_progress", 0);
+        this.speedLevel = Math.min(UpgradeType.MAX_LEVEL, input.getIntOr("speed_level", 0));
+        this.energyLevel = Math.min(UpgradeType.MAX_LEVEL, input.getIntOr("energy_level", 0));
+        this.slotLevel = Math.min(UpgradeType.MAX_LEVEL, input.getIntOr("slot_level", 0));
+        this.itemHandler.setActiveLanes(this.getActiveLanes());
+        this.itemHandler.setSplitInputs(input.getBooleanOr("split_inputs", false));
+        this.recomputeEnergyLimits();
+        for (int lane = 0; lane < FabricatorItemHandler.MAX_LANES; lane++) {
+            this.laneProgress[lane] = input.getIntOr("progress_" + lane, 0);
+            this.laneMaxProgress[lane] = input.getIntOr("max_progress_" + lane, 0);
+        }
     }
 
     @Override
@@ -198,8 +351,14 @@ public class FabricatorBlockEntity extends BlockEntity implements MenuProvider {
         super.saveAdditional(output);
         this.itemHandler.serialize(output.child("items"));
         this.energyHandler.serialize(output.child("energy"));
-        output.putInt("progress", this.progress);
-        output.putInt("max_progress", this.maxProgress);
+        output.putInt("speed_level", this.speedLevel);
+        output.putInt("energy_level", this.energyLevel);
+        output.putInt("slot_level", this.slotLevel);
+        output.putBoolean("split_inputs", this.itemHandler.isSplitInputs());
+        for (int lane = 0; lane < FabricatorItemHandler.MAX_LANES; lane++) {
+            output.putInt("progress_" + lane, this.laneProgress[lane]);
+            output.putInt("max_progress_" + lane, this.laneMaxProgress[lane]);
+        }
     }
 
     @Override

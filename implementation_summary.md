@@ -55,6 +55,84 @@
 
 ## Change Log
 
+### 2026-06-23 — Feature: "Split" toggle so Slot Upgrades actually feed all their lanes
+
+Without this, an external insert (the form pipes use, since it lets the handler pick where things
+go) fills lane 0's input completely before ever touching lane 1 - that's just how
+`ResourceHandler.insert(resource, amount, ctx)`'s default behavior works (confirmed by reading its
+source: it loops index 0..size-1, maxing out each one before moving on). So with Slot Upgrades
+installed but nothing distributing items across lanes, only lane 0 ever processes, and lanes 1-3's
+output slots stay permanently empty - which also explained the separate "piping out of each output
+slot isn't working" report: extraction itself was never broken, there was just nothing in slots
+5-7 to extract, because nothing had fed lanes 1-3 in the first place.
+
+Added a "Split" toggle button to the GUI (top-left, only shown once Slot Upgrade level > 0).
+When on, `FabricatorIoView` overrides the index-less `insert()` to divide the incoming amount
+evenly across every unlocked lane (two passes: even share first, then dump any remainder/blocked
+amount into whichever lanes still have room) instead of falling through to the default fill-lane-0
+behavior. `FabricatorItemHandler` gained the underlying `splitInputs` flag; `FabricatorBlockEntity`
+persists it (`split_inputs`) and exposes it live via a new `ContainerData` index (`DATA_SPLIT`) so
+the button's rendered state stays in sync. Toggling needed actual client->server networking (a
+`ToggleSplitPacket`, the first since the old SDS packets were deleted) since unlike the read-only
+progress/energy data, this is a write coming from a GUI click - `ModNetwork` registers it via
+`RegisterPayloadHandlersEvent.playToServer`.
+
+**Verification:** both halves were checked in isolation via a dedicated-server diagnostic before
+trusting them - directly `set()`-ing items into all 4 output slots and confirming both the no-index
+and indexed `extract()` correctly drained all 4 (ruling out an extraction bug entirely), then
+toggling split and confirming a 40-item insert landed as 10/10/10/10 across the 4 lanes.
+
+### 2026-06-23 — Feature: Speed/Energy/Slot upgrades, 4 parallel processing lanes
+
+Added 4 new items (`upgrade`, `upgrade_speed`, `upgrade_energy`, `upgrade_slots`, simple shapeless
+recipes, "change later") that install by shift-right-clicking the held item onto the Fabricator
+(`FabricatorBlock.useItemOn`, consumed only on success — already-maxed upgrades silently no-op).
+Each of the 3 specific upgrades goes 0-3 (`UpgradeType.MAX_LEVEL`):
+
+- **Slot Upgrade** — the Fabricator's single input/output pair becomes up to 4 *independent
+  parallel lanes*, each matching and processing its own recipe concurrently, all sharing one
+  energy buffer. `FabricatorItemHandler` is now a fixed 8-slot handler (`MAX_LANES=4`; slots
+  `0-3` are inputs, `4-7` are outputs; `inputSlot(lane)`/`outputSlot(lane)` convert). Lanes beyond
+  the current Slot Upgrade level are inert (`isValid` gates on `laneOf(slot) < activeLanes`). The
+  block's front texture/blockstate (`SLOT_TIER`, 0-3) visually reflects the lane count.
+- **Energy Upgrade** — multiplies both energy capacity *and* throughput (`maxInsert`/`maxExtract`)
+  by 3 per level (base values from `Config`; default base capacity is "5 crafts of the example
+  recipe" = 6000, level 3 = 162000). `SimpleEnergyHandler` has no public way to change its limits
+  after construction, so `FabricatorEnergyHandler` subclasses it (protected field access) and adds
+  `setLimits(...)`.
+- **Speed Upgrade** — does *not* just override a recipe's `processing_time`. Progress is now
+  tracked in **energy units accumulated** toward a recipe's fixed total cost
+  (`energyPerTick * processingTime`), not ticks elapsed. Speed Upgrades shrink the *nominal* tick
+  count that total should be paid off in (divisor `{1,4,16,64}` per level — level 3 collapses to 1
+  tick, i.e. instant), which raises the energy required per tick to stay on schedule. But each
+  lane still only gets however much `energyHandler.extract()` actually hands back that tick, capped
+  by `maxExtract` — so a maxed-speed lane with insufficient Energy Upgrades just takes more ticks
+  than its nominal time instead of stalling. With 4 lanes all maxed for speed, they draw from the
+  shared buffer in lane order each tick, so under tight throughput they finish one at a time
+  ("buffering") rather than all in parallel — confirmed by direct testing (see below).
+
+**Bug found while verifying this (would have crashed real saves):** `FabricatorItemHandler`
+grew from 2 slots to 8, but `StacksResourceHandler.deserialize()` unconditionally replaces its
+backing list with whatever size was saved — so loading a Fabricator saved *before* this change
+silently truncated the handler back to 2 slots, and the tick loop then threw
+`IndexOutOfBoundsException` reaching for lane 2/3's slots, crashing the server. Fixed by overriding
+`deserialize` to re-pad the loaded list back to `SLOT_COUNT` (8) afterward. Found by deliberately
+loading the dev save's pre-upgrade Fabricator after this change — it crashed immediately, which is
+exactly why this got caught before shipping rather than after.
+
+**Verification:** as with the energy-extraction fix above, this was checked by hooking
+`ServerStartedEvent`, applying all 3 upgrade types programmatically (confirming each caps at level 3
+and no-ops past it), seeding all 4 lanes with raw iron, and watching real ticks: blockstate
+`slot_tier` matched the applied level, all 4 lanes processed independently, and with Slot+Speed
+maxed but Energy Upgrade left at 0, lanes visibly finished in sequence (lane 0 fully, then lane 1,
+etc.) rather than simultaneously — the buffering behavior was the intended design, not a bug.
+
+GUI: `FabricatorMenu`/`FabricatorScreen` now render 1-4 lane rows (height grows with the Slot
+Upgrade level), computed from `FabricatorMenu.imageHeight(activeLanes)` rather than a fixed
+constant. A one-line summary ("Spd 2/3  Nrg 1/3  Slot 3/3") is drawn top-right. The menu's
+client-side factory now reads `activeLanes` + the 3 levels from the network buffer
+(`FabricatorBlockEntity.writeMenuData`) so it builds the same slot layout the server has.
+
 ### 2026-06-23 — Fix: pipes pulled from the input slot, and output never stacked past 1
 
 Two more bugs surfaced once the energy fix above let processing actually run:

@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "polyfactory:upgrade",
+    "minecraft:glowstone_dust"
+  ],
+  "result": {
+    "id": "polyfactory:upgrade_energy",
+    "count": 1
+  }
+}

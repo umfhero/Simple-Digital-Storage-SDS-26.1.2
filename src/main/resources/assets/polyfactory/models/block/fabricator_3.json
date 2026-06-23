@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "down": "polyfactory:block/fabricator_side",
+    "up": "polyfactory:block/fabricator_top",
+    "north": "polyfactory:block/fabricator_front3",
+    "south": "polyfactory:block/fabricator_side",
+    "east": "polyfactory:block/fabricator_side",
+    "west": "polyfactory:block/fabricator_side",
+    "particle": "polyfactory:block/fabricator_side"
+  }
+}

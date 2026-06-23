@@ -18,48 +18,115 @@ import net.umf.polyfactory.block.entity.FabricatorBlockEntity;
 import net.umf.polyfactory.block.entity.FabricatorItemHandler;
 
 /**
- * Server/client container for the Fabricator GUI: input/output slots backed directly by the
- * block entity's {@link FabricatorItemHandler}, the player's inventory, and synced progress/energy data.
+ * Server/client container for the Fabricator GUI: one input/output slot pair per unlocked lane
+ * (1-{@value FabricatorItemHandler#MAX_LANES}, depending on the Slot Upgrade level), backed
+ * directly by the block entity's {@link FabricatorItemHandler}, plus the player's inventory and
+ * synced per-lane progress/energy/upgrade data.
  */
 public class FabricatorMenu extends AbstractContainerMenu {
 
-    public static final int DATA_PROGRESS = 0;
-    public static final int DATA_MAX_PROGRESS = 1;
-    public static final int DATA_ENERGY = 2;
-    public static final int DATA_MAX_ENERGY = 3;
-    public static final int DATA_COUNT = 4;
+    public static final int MAX_LANES = FabricatorItemHandler.MAX_LANES;
+    public static final int SLOT_SIZE = 16;
+    public static final int LANE_INPUT_X = 52;
+    public static final int LANE_OUTPUT_X = 104;
+    public static final int LANE_Y_START = 26;
+    public static final int LANE_HEIGHT = 20;
+
+    public static final int LANE_PROGRESS_COUNT = MAX_LANES;
+    public static final int DATA_ENERGY = LANE_PROGRESS_COUNT * 2;
+    public static final int DATA_MAX_ENERGY = DATA_ENERGY + 1;
+    public static final int DATA_SPLIT = DATA_MAX_ENERGY + 1;
+    public static final int DATA_BLOCKED = DATA_SPLIT + 1;
+    public static final int DATA_COUNT = DATA_BLOCKED + MAX_LANES;
 
     private final ContainerData data;
     private final ContainerLevelAccess access;
+    private final BlockPos pos;
+    private final int activeLanes;
+    private final int speedLevel;
+    private final int energyLevel;
+    private final int slotLevel;
 
-    private FabricatorMenu(int containerId, Inventory playerInv, BlockPos pos, FabricatorItemHandler itemHandler, ContainerData data) {
+    private FabricatorMenu(int containerId, Inventory playerInv, BlockPos pos, FabricatorItemHandler itemHandler, ContainerData data,
+                            int activeLanes, int speedLevel, int energyLevel, int slotLevel) {
         super(ModMenuTypes.FABRICATOR_MENU.get(), containerId);
         this.access = ContainerLevelAccess.create(playerInv.player.level(), pos);
+        this.pos = pos;
         checkContainerDataCount(data, DATA_COUNT);
         this.data = data;
+        this.activeLanes = activeLanes;
+        this.speedLevel = speedLevel;
+        this.energyLevel = energyLevel;
+        this.slotLevel = slotLevel;
 
-        this.addSlot(new ResourceHandlerSlot(itemHandler, itemHandler::set, FabricatorItemHandler.SLOT_INPUT, 56, 38));
-        this.addSlot(new ResourceHandlerSlot(itemHandler, itemHandler::set, FabricatorItemHandler.SLOT_OUTPUT, 104, 38));
-        this.addStandardInventorySlots(playerInv, 8, 84);
+        for (int lane = 0; lane < activeLanes; lane++) {
+            int y = LANE_Y_START + lane * LANE_HEIGHT;
+            this.addSlot(new ResourceHandlerSlot(itemHandler, itemHandler::set, FabricatorItemHandler.inputSlot(lane), LANE_INPUT_X, y));
+            this.addSlot(new ResourceHandlerSlot(itemHandler, itemHandler::set, FabricatorItemHandler.outputSlot(lane), LANE_OUTPUT_X, y));
+        }
+        this.addStandardInventorySlots(playerInv, 8, inventoryY(activeLanes));
         this.addDataSlots(data);
+    }
+
+    /** Top Y coordinate for the player inventory block, below however many lane rows are shown. */
+    public static int inventoryY(int activeLanes) {
+        return LANE_Y_START + activeLanes * LANE_HEIGHT + 14;
+    }
+
+    public static int imageHeight(int activeLanes) {
+        return inventoryY(activeLanes) + 90;
     }
 
     public static FabricatorMenu createServerMenu(int containerId, Inventory playerInv, BlockPos pos) {
         BlockEntity be = playerInv.player.level().getBlockEntity(pos);
         if (be instanceof FabricatorBlockEntity fabricator) {
-            return new FabricatorMenu(containerId, playerInv, pos, fabricator.getItemHandler(), fabricator.getContainerData());
+            return new FabricatorMenu(containerId, playerInv, pos, fabricator.getItemHandler(), fabricator.getContainerData(),
+                    fabricator.getActiveLanes(), fabricator.getSpeedLevel(), fabricator.getEnergyLevel(), fabricator.getSlotLevel());
         }
-        return new FabricatorMenu(containerId, playerInv, pos, new FabricatorItemHandler(), new SimpleContainerData(DATA_COUNT));
+        return new FabricatorMenu(containerId, playerInv, pos, new FabricatorItemHandler(), new SimpleContainerData(DATA_COUNT), 1, 0, 0, 0);
     }
 
     public static FabricatorMenu clientFactory(int containerId, Inventory playerInv, RegistryFriendlyByteBuf buf) {
         BlockPos pos = buf.readBlockPos();
-        return new FabricatorMenu(containerId, playerInv, pos, new FabricatorItemHandler(), new SimpleContainerData(DATA_COUNT));
+        int activeLanes = buf.readVarInt();
+        int speedLevel = buf.readVarInt();
+        int energyLevel = buf.readVarInt();
+        int slotLevel = buf.readVarInt();
+        return new FabricatorMenu(containerId, playerInv, pos, new FabricatorItemHandler(), new SimpleContainerData(DATA_COUNT),
+                activeLanes, speedLevel, energyLevel, slotLevel);
     }
 
-    public float getProgress() {
-        int max = this.data.get(DATA_MAX_PROGRESS);
-        int current = this.data.get(DATA_PROGRESS);
+    public int getActiveLanes() {
+        return this.activeLanes;
+    }
+
+    public int getSpeedLevel() {
+        return this.speedLevel;
+    }
+
+    public int getEnergyLevel() {
+        return this.energyLevel;
+    }
+
+    public int getSlotLevel() {
+        return this.slotLevel;
+    }
+
+    public BlockPos getPos() {
+        return this.pos;
+    }
+
+    public boolean isSplitInputs() {
+        return this.data.get(DATA_SPLIT) != 0;
+    }
+
+    public boolean isBlocked(int lane) {
+        return this.data.get(DATA_BLOCKED + lane) != 0;
+    }
+
+    public float getProgress(int lane) {
+        int max = this.data.get(LANE_PROGRESS_COUNT + lane);
+        int current = this.data.get(lane);
         return max != 0 ? Mth.clamp((float) current / max, 0.0F, 1.0F) : 0.0F;
     }
 
@@ -91,16 +158,13 @@ public class FabricatorMenu extends AbstractContainerMenu {
 
         ItemStack stackInSlot = slot.getItem();
         ItemStack copy = stackInSlot.copy();
+        int machineSlotCount = this.activeLanes * 2;
 
-        if (index == FabricatorItemHandler.SLOT_OUTPUT) {
-            if (!this.moveItemStackTo(stackInSlot, 2, 38, true)) {
+        if (index < machineSlotCount) {
+            if (!this.moveItemStackTo(stackInSlot, machineSlotCount, machineSlotCount + 36, true)) {
                 return ItemStack.EMPTY;
             }
-        } else if (index == FabricatorItemHandler.SLOT_INPUT) {
-            if (!this.moveItemStackTo(stackInSlot, 2, 38, false)) {
-                return ItemStack.EMPTY;
-            }
-        } else if (!this.moveItemStackTo(stackInSlot, FabricatorItemHandler.SLOT_INPUT, FabricatorItemHandler.SLOT_INPUT + 1, false)) {
+        } else if (!this.moveItemStackTo(stackInSlot, 0, machineSlotCount, false)) {
             return ItemStack.EMPTY;
         }
 

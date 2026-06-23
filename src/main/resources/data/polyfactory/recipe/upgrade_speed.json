@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "polyfactory:upgrade",
+    "minecraft:redstone"
+  ],
+  "result": {
+    "id": "polyfactory:upgrade_speed",
+    "count": 1
+  }
+}
