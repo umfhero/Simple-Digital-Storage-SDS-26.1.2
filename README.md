@@ -4,10 +4,7 @@
   <img src="gitresources/GUI.png" alt="Fabricator block menu">
 </p>
 
-<p align="center">
-  <img src="src/main/resources/assets/polyfactory/textures/block/fabricator_front.png" width="64" alt="Fabricator front texture, idle">
-  <img src="src/main/resources/assets/polyfactory/textures/block/fabricator_front_on.png" width="64" alt="Fabricator front texture, active">
-</p>
+
 
 Poly Factory is a Minecraft mod for NeoForge. It adds a single machine block, the Fabricator, along with a set of items used to upgrade it.
 
