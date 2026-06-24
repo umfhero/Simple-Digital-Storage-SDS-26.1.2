@@ -1,6 +1,10 @@
 # Poly Factory
 
 <p align="center">
+  <img src="gitresources/GUI.png" alt="Fabricator block menu">
+</p>
+
+<p align="center">
   <img src="src/main/resources/assets/polyfactory/textures/block/fabricator_front.png" width="64" alt="Fabricator front texture, idle">
   <img src="src/main/resources/assets/polyfactory/textures/block/fabricator_front_on.png" width="64" alt="Fabricator front texture, active">
 </p>
